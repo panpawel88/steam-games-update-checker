@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Steam Games Update Checker
-Monitors Steam games for updates using the Steam News API
+Monitors Steam games for updates by tracking depot manifest IDs using SteamCMD
 """
 
 import json
@@ -9,22 +9,24 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import requests
+
+from steam_build_tracker import SteamCMDTracker
 
 
 class SteamUpdateChecker:
     """Checks Steam games for updates and sends notifications"""
 
-    STEAM_NEWS_API = "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
-
     def __init__(self, games_file: str = "games.txt",
                  tracked_file: str = "tracked_games.json",
-                 mattermost_webhook: str = None):
+                 mattermost_webhook: str = None,
+                 steamcmd_path: str = None):
         self.games_file = games_file
         self.tracked_file = tracked_file
         self.mattermost_webhook = mattermost_webhook
         self.tracked_data = self._load_tracked_data()
+        self.build_tracker = SteamCMDTracker(steamcmd_path)
 
     def _load_tracked_data(self) -> Dict:
         """Load previously tracked game data"""
@@ -57,106 +59,94 @@ class SteamUpdateChecker:
 
         return games
 
-    def _get_latest_news(self, app_id: str) -> Dict:
-        """Get the latest news item for a Steam game"""
-        try:
-            params = {
-                'appid': app_id,
-                'count': 1,  # Only get the latest news item
-                'maxlength': 300,
-                'format': 'json'
-            }
-
-            response = requests.get(self.STEAM_NEWS_API, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if 'appnews' in data and 'newsitems' in data['appnews']:
-                newsitems = data['appnews']['newsitems']
-                if newsitems:
-                    return newsitems[0]
-
-            return None
-
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching news for app {app_id}: {e}")
-            return None
-
     def _send_mattermost_notification(self, game_name: str, app_id: str,
-                                     news_title: str, news_date: str):
+                                     old_manifest: str, new_manifest: str,
+                                     update_time: str):
         """Send update notification to Mattermost"""
         if not self.mattermost_webhook:
             return
 
         try:
             message = {
-                "text": f"### Steam Game Update Detected!\n\n"
+                "text": f"### Steam Game Build Update Detected!\n\n"
                        f"**Game:** {game_name}\n"
                        f"**App ID:** {app_id}\n"
-                       f"**Update:** {news_title}\n"
-                       f"**Date:** {news_date}\n"
-                       f"**Steam Store:** https://store.steampowered.com/app/{app_id}/"
+                       f"**Old Manifest ID:** `{old_manifest}`\n"
+                       f"**New Manifest ID:** `{new_manifest}`\n"
+                       f"**Detected:** {update_time}\n"
+                       f"**Steam Store:** https://store.steampowered.com/app/{app_id}/\n"
+                       f"**SteamDB:** https://steamdb.info/app/{app_id}/patchnotes/"
             }
 
             response = requests.post(self.mattermost_webhook, json=message, timeout=10)
             response.raise_for_status()
-            print(f"Mattermost notification sent for {game_name}")
+            print(f"  Mattermost notification sent for {game_name}")
 
         except requests.exceptions.RequestException as e:
-            print(f"Error sending Mattermost notification: {e}")
+            print(f"  Error sending Mattermost notification: {e}")
 
     def check_updates(self) -> bool:
         """Check all games for updates. Returns True if any updates found."""
         games = self._parse_games_file()
         updates_found = False
 
-        print(f"Checking {len(games)} games for updates...")
+        print(f"Checking {len(games)} games for updates using SteamCMD...")
         print(f"Timestamp: {datetime.now().isoformat()}")
+        print(f"Note: This may take a while (~30 seconds per game)")
         print("-" * 60)
 
         for game_name, app_id in games:
             print(f"\nChecking: {game_name} (App ID: {app_id})")
 
-            # Get latest news
-            latest_news = self._get_latest_news(app_id)
+            # Get current build info from SteamCMD
+            build_info = self.build_tracker.get_build_info(app_id)
 
-            if not latest_news:
-                print(f"  No news data available")
+            if not build_info:
+                print(f"  Unable to retrieve build info")
+                print(f"  (This may be a DLC, unavailable app, or SteamCMD error)")
                 continue
 
-            news_timestamp = latest_news.get('date', 0)
-            news_title = latest_news.get('title', 'No title')
-            news_date = datetime.fromtimestamp(news_timestamp).strftime('%Y-%m-%d %H:%M:%S')
+            current_manifest = build_info['primary_manifest']
+            update_time = build_info['checked_at']
 
             # Check if this is a new update
             if app_id in self.tracked_data:
-                last_timestamp = self.tracked_data[app_id].get('last_news_date', 0)
+                last_manifest = self.tracked_data[app_id].get('manifest_id', '')
 
-                if news_timestamp > last_timestamp:
-                    print(f"  UPDATE DETECTED!")
-                    print(f"  Latest news: {news_title}")
-                    print(f"  News date: {news_date}")
+                if current_manifest != last_manifest and last_manifest:
+                    print(f"  BUILD UPDATE DETECTED!")
+                    print(f"    Old manifest: {last_manifest}")
+                    print(f"    New manifest: {current_manifest}")
                     updates_found = True
 
                     # Send notification
-                    self._send_mattermost_notification(game_name, app_id, news_title, news_date)
+                    self._send_mattermost_notification(
+                        game_name, app_id, last_manifest, current_manifest, update_time
+                    )
+                elif current_manifest == last_manifest:
+                    print(f"  No updates")
+                    print(f"    Current manifest: {current_manifest}")
+                    print(f"    Last checked: {self.tracked_data[app_id].get('last_checked', 'N/A')}")
                 else:
-                    print(f"  No updates (last check: {self.tracked_data[app_id].get('last_checked', 'N/A')})")
+                    # First time tracking (last_manifest is empty)
+                    print(f"  First time tracking this game")
+                    print(f"    Current manifest: {current_manifest}")
             else:
                 print(f"  First time tracking this game")
-                print(f"  Latest news: {news_title}")
-                print(f"  News date: {news_date}")
+                print(f"    Current manifest: {current_manifest}")
+                print(f"    Total depots: {len(build_info['manifest_ids'])}")
 
             # Update tracked data
             self.tracked_data[app_id] = {
                 'name': game_name,
-                'last_news_date': news_timestamp,
-                'last_news_title': news_title,
+                'manifest_id': current_manifest,
+                'all_manifests': build_info['manifest_ids'],
+                'depot_count': len(build_info['manifest_ids']),
                 'last_checked': datetime.now().isoformat()
             }
 
-            # Be nice to Steam's API - add a small delay between requests
-            time.sleep(1)
+            # Small delay between games to avoid overwhelming Steam
+            time.sleep(2)
 
         # Save updated tracking data
         self._save_tracked_data()

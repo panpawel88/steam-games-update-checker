@@ -15,6 +15,7 @@ on:
     paths:
       - 'games.txt'
       - 'check_updates.py'
+      - 'steam_build_tracker.py'
       - '.github/workflows/check_updates.yml'
 
 jobs:
@@ -37,6 +38,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
+      - name: Install SteamCMD
+        run: |
+          sudo add-apt-repository multiverse -y
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y lib32gcc-s1 steamcmd
+          # Verify installation
+          which steamcmd || echo "SteamCMD not found in PATH"
 
       - name: Check for game updates
         id: check
