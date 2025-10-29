@@ -40,3 +40,8 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Local testing files (Windows-specific)
+test_local.py
+check_updates_local.py
+steamcmd_debug_*.txt

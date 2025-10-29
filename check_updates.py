@@ -60,7 +60,7 @@ class SteamUpdateChecker:
         return games
 
     def _send_mattermost_notification(self, game_name: str, app_id: str,
-                                     old_manifest: str, new_manifest: str,
+                                     old_version: str, new_version: str,
                                      update_time: str):
         """Send update notification to Mattermost"""
         if not self.mattermost_webhook:
@@ -71,8 +71,8 @@ class SteamUpdateChecker:
                 "text": f"### Steam Game Build Update Detected!\n\n"
                        f"**Game:** {game_name}\n"
                        f"**App ID:** {app_id}\n"
-                       f"**Old Manifest ID:** `{old_manifest}`\n"
-                       f"**New Manifest ID:** `{new_manifest}`\n"
+                       f"**Old Version:** `{old_version}`\n"
+                       f"**New Version:** `{new_version}`\n"
                        f"**Detected:** {update_time}\n"
                        f"**Steam Store:** https://store.steampowered.com/app/{app_id}/\n"
                        f"**SteamDB:** https://steamdb.info/app/{app_id}/patchnotes/"
@@ -106,42 +106,51 @@ class SteamUpdateChecker:
                 print(f"  (This may be a DLC, unavailable app, or SteamCMD error)")
                 continue
 
-            current_manifest = build_info['primary_manifest']
+            # Prefer build_id, fallback to primary_manifest
+            current_version = build_info.get('build_id') or build_info.get('primary_manifest')
             update_time = build_info['checked_at']
+
+            if not current_version:
+                print(f"  No version information available")
+                continue
 
             # Check if this is a new update
             if app_id in self.tracked_data:
-                last_manifest = self.tracked_data[app_id].get('manifest_id', '')
+                # Support both old 'manifest_id' and new 'version' field names
+                last_version = self.tracked_data[app_id].get('version') or self.tracked_data[app_id].get('manifest_id', '')
 
-                if current_manifest != last_manifest and last_manifest:
+                if current_version != last_version and last_version:
                     print(f"  BUILD UPDATE DETECTED!")
-                    print(f"    Old manifest: {last_manifest}")
-                    print(f"    New manifest: {current_manifest}")
+                    print(f"    Old version: {last_version}")
+                    print(f"    New version: {current_version}")
                     updates_found = True
 
                     # Send notification
                     self._send_mattermost_notification(
-                        game_name, app_id, last_manifest, current_manifest, update_time
+                        game_name, app_id, last_version, current_version, update_time
                     )
-                elif current_manifest == last_manifest:
+                elif current_version == last_version:
                     print(f"  No updates")
-                    print(f"    Current manifest: {current_manifest}")
+                    print(f"    Current version: {current_version}")
                     print(f"    Last checked: {self.tracked_data[app_id].get('last_checked', 'N/A')}")
                 else:
-                    # First time tracking (last_manifest is empty)
+                    # First time tracking (last_version is empty)
                     print(f"  First time tracking this game")
-                    print(f"    Current manifest: {current_manifest}")
+                    print(f"    Current version: {current_version}")
             else:
                 print(f"  First time tracking this game")
-                print(f"    Current manifest: {current_manifest}")
-                print(f"    Total depots: {len(build_info['manifest_ids'])}")
+                print(f"    Current version: {current_version}")
+                if build_info.get('manifest_ids'):
+                    print(f"    Total depots: {len(build_info['manifest_ids'])}")
 
             # Update tracked data
             self.tracked_data[app_id] = {
                 'name': game_name,
-                'manifest_id': current_manifest,
-                'all_manifests': build_info['manifest_ids'],
-                'depot_count': len(build_info['manifest_ids']),
+                'version': current_version,  # Renamed from manifest_id to version
+                'build_id': build_info.get('build_id'),
+                'primary_manifest': build_info.get('primary_manifest'),
+                'all_manifests': build_info.get('manifest_ids', []),
+                'depot_count': len(build_info.get('manifest_ids', [])),
                 'last_checked': datetime.now().isoformat()
             }
 
