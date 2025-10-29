@@ -1,0 +1,6 @@
+# Steam Games to Track
+# Format: game_name,app_id
+# Example games (replace with your own):
+Team Fortress 2,440
+Counter-Strike 2,730
+Dota 2,570
