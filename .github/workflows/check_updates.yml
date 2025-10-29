@@ -11,7 +11,7 @@ on:
   # Run on push to main for testing
   push:
     branches:
-      - main
+      - master
     paths:
       - 'games.txt'
       - 'check_updates.py'
